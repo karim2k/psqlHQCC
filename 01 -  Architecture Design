@@ -1,0 +1,68 @@
+PostgreSQL High-Availability Architecture
+
+1. Cluster Diagram
+
+                       [Load Balancer]
+                              |
+           -----------------------------------
+           |                 |               |
+     [Primary Node]    [Replica 1]      [Replica 2]
+     (Read/Write)      (Hot Standby)    (Hot Standby)
+           |                 |               |
+     [Monitoring]      [Monitoring]     [Monitoring]
+    (Bash Cron)      (Bash Cron)      (Bash Cron)
+
+Key Components:
+- Primary Node: Handles all writes, replicates data to replicas
+- Replica Nodes: Hot standbys for read scaling and failover
+- Load Balancer: Routes traffic and detects primary failure
+- Monitoring: Cron jobs checking status and replication
+
+2. Network Topology
+- Private network (10.0.0.0/24)
+- Replication via port 5432
+- Health checks using pg_isready
+
+3. Failover Mechanism
+Failure Detection:
+- Cron job runs every 10s on replicas:
+  pg_isready -h primary_ip -p 5432 || trigger_failover.sh
+
+Promote Replica:
+- trigger_failover.sh promotes replica using:
+  pg_ctl promote -D $PGDATA
+
+Recovery Time Objective: 30-60 seconds
+
+4. Monitoring
+Script (monitor_node.sh):
+
+#!/bin/bash
+if ! pg_isready -q -h localhost; then
+  echo "ALERT: PostgreSQL down" | mail admin@example.com
+fi
+
+if [ "$(whoami)" = "postgres" ]; then
+  lag=$(psql -c "SELECT EXTRACT(SECOND FROM (now() - pg_last_xact_replay_timestamp())) AS lag;" -t)
+  if [ "${lag%.*}" -gt 5 ]; then
+    echo "ALERT: Replication lag ${lag}s" | mail admin@example.com
+  fi
+fi
+
+Cron job runs every minute:
+* * * * * /usr/local/bin/monitor_node.sh >> /var/log/postgres_monitor.log
+
+5. Design Decisions
+
+Choice: Synchronous Replication
+Reason: Ensures no data loss for healthcare records
+
+Choice: Bash + Cron
+Reason: Simple to maintain, no external tools needed
+
+Choice: Hot Standbys
+Reason: Fast failover capability
+
+Trade-offs:
+- Manual load balancer updates after failover
+- Risk of split-brain without quorum (mitigated by sync replication)

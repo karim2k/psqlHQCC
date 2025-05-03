@@ -1,0 +1,161 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{graphicx}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+\title{PostgreSQL High Availability Solution}
+\author{Database Engineering Team}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\section{System Overview}
+\subsection{Architecture}
+\begin{itemize}
+\item Primary node (read/write)
+\item 2+ replica nodes (hot standby)
+\item Automated failover with Bash/Python
+\item Health monitoring system
+\end{itemize}
+
+\subsection{Components}
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Component} & \textbf{Version} \\
+\hline
+PostgreSQL & 14+ \\
+Streaming Replication & Native \\
+Failover Manager & Bash Scripts \\
+Monitoring & Custom Python \\
+\hline
+\end{tabular}
+
+\section{Installation Guide}
+\subsection{Requirements}
+\begin{itemize}
+\item 3+ Ubuntu/Debian 20.04/22.04 servers
+\item SSH key-based access between nodes
+\item Minimum 4GB RAM, 2 CPU cores per node
+\end{itemize}
+
+\subsection{Setup Commands}
+\begin{lstlisting}[language=bash,caption={Primary Node Setup}]
+sudo NODE_TYPE=primary bash setup_postgres_ha.sh
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash,caption={Replica Node Setup}]
+sudo NODE_TYPE=replica PRIMARY_IP=<primary_ip> bash setup_postgres_ha.sh
+\end{lstlisting}
+
+\section{Failover Procedures}
+\subsection{Automated Failover}
+\begin{enumerate}
+\item Health checks fail (30s timeout)
+\item Trigger file created
+\item Replica promotion
+\item Cluster reconfiguration
+\end{enumerate}
+
+\subsection{Manual Failover}
+\begin{lstlisting}[language=bash,caption={Manual Promotion}]
+sudo -u postgres pg_ctl promote -D /var/lib/postgresql/14/main
+\end{lstlisting}
+
+\section{Recovery Processes}
+\subsection{Primary Recovery}
+\begin{lstlisting}[language=bash,caption={Failed Primary Recovery}]
+sudo -u postgres pg_rewind -D /var/lib/postgresql/14/main \
+  --source-server="host=new_primary"
+\end{lstlisting}
+
+\section{Monitoring System}
+\subsection{Metrics Collected}
+\begin{itemize}
+\item Node availability (up/down)
+\item Replication lag (seconds)
+\item Disk space usage (\%)
+\item Connection latency (ms)
+\end{itemize}
+
+\subsection{Alert Thresholds}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Metric} & \textbf{Warning} & \textbf{Critical} \\
+\hline
+Replication Lag & 10s & 30s \\
+Disk Space & 80\% & 90\% \\
+\hline
+\end{tabular}
+
+\section{Limitations}
+\begin{itemize}
+\item Maximum 5 nodes supported
+\item Failover time 30-60 seconds
+\item No automatic backup management
+\end{itemize}
+
+\section{Future Improvements}
+\subsection{Short-term}
+\begin{itemize}
+\item Prometheus metrics endpoint
+\item Slack notifications
+\end{itemize}
+
+\subsection{Long-term}
+\begin{itemize}
+\item Kubernetes operator
+\item Web management UI
+\end{itemize}
+
+\section{Maintenance}
+\subsection{Routine Checks}
+\begin{itemize}
+\item Daily replication verification
+\item Monthly failover testing
+\end{itemize}
+
+\section{Troubleshooting}
+\subsection{Common Issues}
+\begin{lstlisting}[language=SQL,caption={High Replication Lag}]
+SELECT pg_wal_replay_resume();
+\end{lstlisting}
+
+\begin{thebibliography}{9}
+\bibitem{postgresql}
+PostgreSQL Documentation,
+\textit{https://www.postgresql.org/docs/}
+\end{thebibliography}
+
+\end{document}

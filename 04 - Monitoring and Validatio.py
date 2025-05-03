@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""
+PostgreSQL Cluster Monitoring Script
+Monitors node health, replication status, and failover readiness
+"""
+
+import psycopg2
+import subprocess
+import smtplib
+from datetime import datetime
+import time
+import sys
+import socket
+
+# Configuration
+NODES = {
+    'primary': {'host': '192.168.1.100', 'port': 5432},
+    'replica1': {'host': '192.168.1.101', 'port': 5432},
+    'replica2': {'host': '192.168.1.102', 'port': 5432}
+}
+
+DB_USER = 'monitor_user'
+DB_PASSWORD = 'monitor_password'
+ALERT_THRESHOLDS = {
+    'replication_lag': 10,  # seconds
+    'disk_space': 85,       # percent used
+    'connection_time': 2    # seconds
+}
+ALERT_EMAILS = ['admin@example.com']
+SMTP_SERVER = 'smtp.example.com'
+
+# Monitoring Functions
+def check_node_connectivity(host, port):
+    try:
+        start_time = time.time()
+        sock = socket.create_connection((host, port), timeout=ALERT_THRESHOLDS['connection_time'])
+        sock.close()
+        return True, round((time.time() - start_time) * 1000, 2)
+    except (socket.timeout, ConnectionRefusedError) as e:
+        return False, str(e)
+
+def get_replication_status(connection):
+    try:
+        with connection.cursor() as cursor:
+            # Check if primary
+            cursor.execute("SELECT pg_is_in_recovery()")
+            is_replica = cursor.fetchone()[0]
+            
+            status = {'is_replica': is_replica}
+            
+            if is_replica:
+                cursor.execute("""
+                    SELECT status, pg_last_wal_receive_lsn(), 
+                    pg_last_wal_replay_lsn(), pg_last_xact_replay_timestamp()
+                    FROM pg_stat_wal_receiver
+                """)
+                receiver_info = cursor.fetchone()
+                
+                cursor.execute("""
+                    SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) AS lag_seconds
+                """)
+                lag_info = cursor.fetchone()
+                
+                status.update({
+                    'receiver_status': receiver_info[0] if receiver_info else None,
+                    'receive_lsn': receiver_info[1] if receiver_info else None,
+                    'replay_lsn': receiver_info[2] if receiver_info else None,
+                    'last_replay': receiver_info[3] if receiver_info else None,
+                    'replication_lag': lag_info[0] if lag_info else None
+                })
+            else:
+                cursor.execute("""
+                    SELECT pid, application_name, state, sync_state,
+                    pg_wal_lsn_diff(pg_current_wal_lsn(), flush_lsn) AS flush_lag,
+                    pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS replay_lag
+                    FROM pg_stat_replication
+                """)
+                status['replicas'] = [{
+                    'pid': r[0],
+                    'name': r[1],
+                    'state': r[2],
+                    'sync_state': r[3],
+                    'flush_lag': r[4],
+                    'replay_lag': r[5]
+                } for r in cursor.fetchall()]
+            
+            # Disk space check
+            cursor.execute("""
+                SELECT df.oid, df.datname, 
+                pg_size_pretty(pg_database_size(df.datname)) as size,
+                (pg_database_size(df.datname) / 
+                (SELECT SUM(pg_database_size(datname)) FROM pg_database) * 100 
+                AS percent_used
+                FROM pg_database df
+                ORDER BY percent_used DESC
+            """)
+            status['disk_usage'] = cursor.fetchall()
+            
+            return status
+            
+    except psycopg2.Error as e:
+        return {'error': str(e)}
+
+def verify_failover_mechanisms():
+    tests = {
+        'trigger_file': {
+            'command': 'test -f /var/lib/postgresql/failover.trigger',
+            'description': 'Failover trigger file exists'
+        },
+        'replication_slots': {
+            'command': """sudo -u postgres psql -c "SELECT count(*) FROM pg_replication_slots" -t | grep -v 0""",
+            'description': 'Active replication slots exist'
+        },
+        'backup_archiving': {
+            'command': 'test -d /var/lib/postgresql/wal_archive',
+            'description': 'WAL archive directory exists'
+        }
+    }
+    
+    results = {}
+    for name, test in tests.items():
+        try:
+            subprocess.run(test['command'], shell=True, check=True, 
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            results[name] = {'status': 'OK', 'message': test['description']}
+        except subprocess.CalledProcessError as e:
+            results[name] = {'status': 'FAIL', 'message': f"{test['description']} - Error: {e.stderr.decode().strip()}"}
+    
+    return results
+
+# Alerting Functions
+def send_alert(subject, message):
+    email_text = f"""\
+From: PostgreSQL Monitor <monitor@example.com>
+To: {", ".join(ALERT_EMAILS)}
+Subject: {subject}
+
+{message}
+"""
+    
+    try:
+        with smtplib.SMTP(SMTP_SERVER) as server:
+            server.sendmail('monitor@example.com', ALERT_EMAILS, email_text)
+    except Exception as e:
+        print(f"Failed to send email alert: {str(e)}", file=sys.stderr)
+
+def check_thresholds(node, status):
+    alerts = []
+    
+    if 'error' in status:
+        alerts.append(f"Connection error to {node}: {status['error']}")
+        return alerts
+    
+    if status.get('is_replica', False):
+        lag = status.get('replication_lag')
+        if lag and lag > ALERT_THRESHOLDS['replication_lag']:
+            alerts.append(f"High replication lag on {node}: {lag} seconds")
+    else:
+        for replica in status.get('replicas', []):
+            if replica['state'] != 'streaming':
+                alerts.append(f"Replica {replica['name']} not streaming (state: {replica['state']})")
+    
+    for db in status.get('disk_usage', []):
+        if db[3] > ALERT_THRESHOLDS['disk_space']:
+            alerts.append(f"High disk usage for database {db[1]} on {node}: {db[3]:.2f}%")
+    
+    return alerts
+
+# Main Monitoring Loop
+def main():
+    overall_status = {
+        'timestamp': datetime.now().isoformat(),
+        'nodes': {},
+        'failover_tests': verify_failover_mechanisms(),
+        'alerts': []
+    }
+    
+    for node_name, config in NODES.items():
+        node_status = {}
+        conn = None
+        
+        # Check basic connectivity
+        reachable, latency = check_node_connectivity(config['host'], config['port'])
+        node_status['reachable'] = reachable
+        node_status['connection_latency_ms'] = latency if reachable else None
+        
+        if reachable:
+            try:
+                conn = psycopg2.connect(
+                    host=config['host'],
+                    port=config['port'],
+                    user=DB_USER,
+                    password=DB_PASSWORD,
+                    connect_timeout=ALERT_THRESHOLDS['connection_time']
+                )
+                node_status.update(get_replication_status(conn))
+            except psycopg2.Error as e:
+                node_status['error'] = str(e)
+            finally:
+                if conn:
+                    conn.close()
+        
+        # Check for threshold violations
+        alerts = check_thresholds(node_name, node_status)
+        if alerts:
+            overall_status['alerts'].extend(alerts)
+        
+        overall_status['nodes'][node_name] = node_status
+    
+    # Check failover mechanisms
+    for test_name, result in overall_status['failover_tests'].items():
+        if result['status'] == 'FAIL':
+            overall_status['alerts'].append(f"Failover test failed: {result['message']}")
+    
+    # Send alerts if any
+    if overall_status['alerts']:
+        alert_subject = f"PostgreSQL Cluster Alert - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        alert_message = "\n".join(overall_status['alerts'])
+        send_alert(alert_subject, alert_message)
+    
+    # Print status (could be logged to file)
+    print(f"Cluster status at {overall_status['timestamp']}:")
+    for alert in overall_status['alerts']:
+        print(f"[ALERT] {alert}")
+    
+    return 0 if not overall_status['alerts'] else 1
+
+if __name__ == "__main__":
+    sys.exit(main())
