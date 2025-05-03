@@ -1,6 +1,6 @@
 # PostgreSQL High Availability Cluster
 
-![HA Architecture Diagram](diagrams/PostgreSQL_HA_Architecture.png)
+![HA Architecture Diagram]
 
 ## 📌 Project Overview
 Enterprise-grade PostgreSQL HA solution with:
