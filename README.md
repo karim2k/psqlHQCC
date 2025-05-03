@@ -1,7 +1,5 @@
 # PostgreSQL High Availability Cluster
 
-![HA Architecture Diagram]
-
 ## 📌 Project Overview
 Enterprise-grade PostgreSQL HA solution with:
 - **<30s failover** detection
