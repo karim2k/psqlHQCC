@@ -79,35 +79,4 @@ watch -n 1 'psql -h <replica_ip> -c "SELECT NOT pg_is_in_recovery()"'
 4. **Extensible** monitoring framework
 
 ## 📬 Contact
-Questions? Open an issue or contact [project maintainer](mailto:ha-postgres-admin@example.com)
-
----
-
-**Bonus**: Includes sample CI/CD pipeline for rolling updates!
-
-```yaml
-# .github/workflows/ha-test.yml
-name: Failover Test
-on: [schedule]
-jobs:
-  test-failover:
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v3
-      - run: ./scripts/test/failover_test.sh
-```
-
-This presentation features:
-1. Visual hierarchy with emoji categorization
-2. Ready-to-copy deployment commands
-3. Clear testing procedures
-4. Mobile-responsive layout
-5. Embedded architecture diagram
-6. Production readiness checklist
-7. CI/CD integration example
-
-Would you like me to add any specific:
-- Performance benchmarks?
-- Security compliance details?
-- Multi-cloud deployment notes?
-- Disaster recovery scenarios?
+Questions? Open an issue or contact [project maintainer](mailto:karim2k@gmail.com)
